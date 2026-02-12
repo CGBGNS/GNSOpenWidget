@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Participant Data</title>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    input { padding: 8px; min-width: 320px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; overflow: auto; max-height: 70vh; }
+    .error { color: #b00020; }
+  </style>
+</head>
+
+<body>
+  <h1>Participant Data (GET)</h1>
+
+  <div class="row">
+    <div><strong>conversationId:</strong> <span id="cidLabel">-</span></div>
+    <button id="btnReload">Refrescar</button>
+    <span id="status"></span>
+  </div>
+
+  <pre id="output">{}</pre>
+
+  <script>
+    // CONFIG
+    const BASE_URL     = 'https://api.mypurecloud.de';
+    const CLIENT_ID    = 'd3da67cdc-4c46-424a-adae-6807465fc4a4';
+    const ENVIRONMENT  = 'mypurecloud.de';
+    const REDIRECT_URI = 'https://CGBGNS.github.io/GNSOpenWidget/index.html';
+
+    // ---- Helpers ----
+    function getParam(name) {
+      return new URLSearchParams(window.location.search).get(name);
+    }
+    function setStatus(msg, isError = false) {
+      const el = document.getElementById('status');
+      el.textContent = msg || '';
+      el.className = isError ? 'error' : '';
+    }
+
+    // conversationId must come in the URL: ?conversationId=XXXX
+    const conversationId = getParam('conversationId') || '';
+    document.getElementById('cidLabel').textContent = conversationId || '(missing)';
+
+    // token can come from the hash (implicit flow): #access_token=...
+    const gToken = new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('access_token');
+
+    function fetchPD(conversationId) {
+      return $.ajax({
+        url: `${BASE_URL}/platform/api/v2/conversations/calls/${encodeURIComponent(conversationId)}`,
+        method: 'GET',
+        dataType: 'json',
+        headers: {
+          'Authorization': 'Bearer ' + gToken,
+          'Accept': 'application/json'
+        }
+      }).then(
+        data => data,
+        jqXHR => {
+          const msg =
+            (jqXHR.responseJSON && (jqXHR.responseJSON.message || jqXHR.responseJSON.error)) ||
+            jqXHR.statusText ||
+            'Request failed';
+          return Promise.reject(new Error(`HTTP ${jqXHR.status}: ${msg}`));
+        }
+      );
+    }
+
+    async function load() {
+      document.getElementById('output').textContent = '';
+      setStatus('');
+
+      if (!conversationId) {
+        setStatus('Falta ?conversationId=... en la URL', true);
+        document.getElementById('output').textContent =
+          'Ejemplo: index.html?conversationId=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX';
+        return;
+      }
+
+      // If no token in hash -> do OAuth redirect
+      if (!gToken) {
+        const qs = $.param({
+          response_type: 'token',
+          client_id: CLIENT_ID,
+          redirect_uri: REDIRECT_URI
+        });
+        window.location.replace(`https://login.${ENVIRONMENT}/oauth/authorize?${qs}`);
+        return;
+      }
+
+      try {
+        setStatus('Cargando...');
+        const data = await fetchPD(conversationId);
+        document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+        setStatus('OK');
+      } catch (e) {
+        setStatus(e.message, true);
+        document.getElementById('output').textContent = e.stack || String(e);
+      }
+    }
+
+    document.getElementById('btnReload').addEventListener('click', load);
+    load();
+  </script>
+</body>
+</html>
