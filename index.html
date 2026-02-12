@@ -52,7 +52,7 @@ function setStatus(msg, isError=false) {
   $status.textContent = msg;
   $status.className = isError ? 'error' : 'muted';
 }
-function pretty(obj){ try { return JSON.stringify(obj, null, 2); } catch(e) { return String(obj); } }
+function pretty(obj){ try { return JSON.stringify(obj, null, 2); } catch(e) { return String(e); } }
 function getQueryParam(name){ return new URLSearchParams(window.location.search).get(name); }
 function parseHashFragment(hash){ return Object.fromEntries(new URLSearchParams((hash||'').replace(/^#/,'')).entries()); }
 
@@ -61,7 +61,6 @@ function parseHashFragment(hash){ return Object.fromEntries(new URLSearchParams(
 //
 function encodeState(obj){
   const json = JSON.stringify(obj);
-  // use btoa with utf8 handling
   return btoa(unescape(encodeURIComponent(json)));
 }
 function decodeState(b64){
@@ -199,12 +198,27 @@ function fetchPD(conversationId, token){
   }
 
   // Wire reload button to re-fetch using existing token and finalConversationId
-  document.getElementById('btnReload').addEventListener('click', async () => {
-    setStatus('Refrescando...');
-    try {
-      const d = await fetchPD(finalConversationId, token);
-      $output.textContent = pretty(d);
-      setStatus('OK');
-    } catch (ee) {
-      $output.textContent = ee.stack || ee.message || String(ee);
-      setS
+  const btn = document.getElementById('btnReload');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      logDebug('btnReload clicked');
+      setStatus('Refrescando...');
+      try {
+        const d = await fetchPD(finalConversationId, token);
+        $output.textContent = pretty(d);
+        setStatus('OK');
+        logDebug('Refresh successful.');
+      } catch (ee) {
+        $output.textContent = ee.stack || ee.message || String(ee);
+        setStatus('Error en la petición', true);
+        logDebug('Refresh error: ' + (ee.message || String(ee)));
+      }
+    });
+  } else {
+    logDebug('btnReload not found in DOM.');
+  }
+
+})();
+</script>
+</body>
+</html>
