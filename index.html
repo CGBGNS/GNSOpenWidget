@@ -73,13 +73,13 @@ function decodeState(b64){
   }
 }
 
-function buildAuthUrl(conversationId){
+function buildAuthUrl(gcConversationId){
   const nonce = Math.random().toString(36).slice(2);
-  const stateObj = { nonce, conversationId };
+  const stateObj = { nonce, gcConversationId };
   const stateB64 = encodeState(stateObj);
   // store nonce and conversationId in sessionStorage as fallback
   sessionStorage.setItem('oauth_nonce', nonce);
-  sessionStorage.setItem('oauth_conversationId', conversationId);
+  sessionStorage.setItem('oauth_gcConversationId', gcConversationId);
   sessionStorage.setItem('oauth_state_b64', stateB64); // helpful for debugging
   const params = new URLSearchParams({
     response_type: 'token',
@@ -95,9 +95,9 @@ function clearUrlFragment(){
   if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
-function fetchPD(conversationId, token){
+function fetchPD(gcConversationId, token){
   return $.ajax({
-    url: `${BASE_URL}/platform/api/v2/conversations/calls/${encodeURIComponent(conversationId)}`,
+    url: `${BASE_URL}/platform/api/v2/conversations/calls/${encodeURIComponent(gcConversationId)}`,
     method: 'GET',
     dataType: 'json',
     headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
@@ -112,9 +112,9 @@ function fetchPD(conversationId, token){
   setStatus('Iniciando...');
   $debug.textContent = '';
   // conversationId may be provided as query param when first opening the app
-  let conversationId = getQueryParam('conversationId') || null;
-  $cidLabel.textContent = 'conversationId: ' + (conversationId || '-');
-  logDebug('Initial query conversationId: ' + conversationId);
+  let conversationId = getQueryParam('gcConversationId') || null;
+  $cidLabel.textContent = 'gcConversationId: ' + (gcConversationId || '-');
+  logDebug('Initial query gcConversationId: ' + gcConversationId);
 
   // parse hash (returned by implicit flow)
   const hashParams = parseHashFragment(window.location.hash);
@@ -161,13 +161,13 @@ function fetchPD(conversationId, token){
 
   // If no token -> start auth (embedding conversationId in state); but ensure conversationId exists
   if (!token) {
-    if (!conversationId) {
+    if (!gcConversationId) {
       setStatus('Falta conversationId en la URL (ej: ?conversationId=...)', true);
       $output.textContent = 'Ejemplo: index.html?conversationId=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX';
       logDebug('Abort: no conversationId to embed in state and no token present.');
       return;
     }
-    const authUrl = buildAuthUrl(conversationId);
+    const authUrl = buildAuthUrl(gcConversationId);
     logDebug('Redirecting to auth URL (first 200 chars): ' + authUrl.slice(0,200));
     setStatus('Redirigiendo para login...');
     window.location.href = authUrl;
@@ -175,7 +175,7 @@ function fetchPD(conversationId, token){
   }
 
   // We have token; prefer recoveredConversationId (state) over initial query param
-  const finalConversationId = recoveredConversationId || conversationId;
+  const finalConversationId = recoveredConversationId || gcConversationId;
   if (!finalConversationId) {
     setStatus('No se recuperó conversationId del state ni query ni sessionStorage', true);
     $output.textContent = 'No se puede continuar: falta conversationId.';
