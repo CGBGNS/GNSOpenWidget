@@ -1,188 +1,210 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Participant Data - OAuth + state</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Participant Data - OAuth + state (robusto)</title>
   <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
   <style>
     body{font-family:system-ui,Arial,sans-serif;margin:18px;}
     header{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
     button{padding:8px 12px;cursor:pointer;}
-    pre{background:#0b0b0b;color:#e6e6e6;padding:12px;border-radius:6px;white-space:pre-wrap;max-height:70vh;overflow:auto;}
+    pre{background:#0b0b0b;color:#e6e6e6;padding:12px;border-radius:6px;white-space:pre-wrap;max-height:60vh;overflow:auto;}
     .muted{color:#666;font-size:0.9rem;}
     .error{color:#b00020;}
+    .log{font-family:monospace;background:#f7f7f7;padding:8px;border-radius:6px; max-height:150px; overflow:auto;}
   </style>
 </head>
 <body>
   <header>
-    <h2 style="margin:0">Participant Data (OAuth + state)</h2>
+    <h3 style="margin:0">Participant Data (OAuth + state robusto)</h3>
     <div class="muted" id="cidLabel">conversationId: -</div>
     <button id="btnReload">Refrescar</button>
     <div id="status" class="muted" style="margin-left:8px"></div>
   </header>
 
+  <div>
+    <strong>Debug info:</strong>
+    <div id="debug" class="log"></div>
+  </div>
+
+  <h4>Resultado</h4>
   <pre id="output">{ }</pre>
 
-  <script>
-    /* ======= CONFIG - adapta estos valores EXACTAMENTE a tu entorno ======= */
-    const CLIENT_ID    = '3da67cdc-4c46-424a-adae-6807465fc4a4'; // <--- pon aquí tu client_id (no es secreto)
-    const ENVIRONMENT  = 'mypurecloud.de';    // p.ej. 'mypurecloud.de' para región Alemania
-    const BASE_URL     = 'https://api.mypurecloud.de';
-    const REDIRECT_URI = 'https://cgbgns.github.io/GNSOpenWidget/index.html'; // debe coincidir exactamente con lo registrado
-    /* ===================================================================== */
+<script>
+/* ========== CONFIG - sustituye por tus valores ========== */
+const CLIENT_ID    = '3da67cdc-4c46-424a-adae-6807465fc4a4';
+const ENVIRONMENT  = 'mypurecloud.de';             // p.ej. mypurecloud.de
+const BASE_URL     = 'https://api.mypurecloud.de'; // coincidir con región
+const REDIRECT_URI = 'https://cgbgns.github.io/GNSOpenWidget/index.html'; // EXACT match en OAuth client
+/* ======================================================= */
 
-    // Helpers
-    const $output = document.getElementById('output');
-    const $status = document.getElementById('status');
-    const $cidLabel = document.getElementById('cidLabel');
+const $output = document.getElementById('output');
+const $status = document.getElementById('status');
+const $debug  = document.getElementById('debug');
+const $cidLabel = document.getElementById('cidLabel');
 
-    function setStatus(msg, isError = false) {
-      $status.textContent = msg || '';
-      $status.className = isError ? 'error' : 'muted';
-    }
+function logDebug(msg) {
+  console.log(msg);
+  $debug.textContent += msg + '\n';
+}
+function setStatus(msg, isError=false) {
+  $status.textContent = msg;
+  $status.className = isError ? 'error' : 'muted';
+}
+function pretty(obj){ try { return JSON.stringify(obj, null, 2); } catch(e) { return String(obj); } }
+function getQueryParam(name){ return new URLSearchParams(window.location.search).get(name); }
+function parseHashFragment(hash){ return Object.fromEntries(new URLSearchParams((hash||'').replace(/^#/,'')).entries()); }
 
-    function pretty(obj) {
-      try { return JSON.stringify(obj, null, 2); } catch (e) { return String(obj); }
-    }
+//
+// Encode state as BASE64 to avoid double-encoding/charset issues
+//
+function encodeState(obj){
+  const json = JSON.stringify(obj);
+  // use btoa with utf8 handling
+  return btoa(unescape(encodeURIComponent(json)));
+}
+function decodeState(b64){
+  try {
+    const json = decodeURIComponent(escape(atob(b64)));
+    return JSON.parse(json);
+  } catch(e){
+    logDebug('decodeState failed: ' + e);
+    return null;
+  }
+}
 
-    function getQueryParam(name) {
-      return new URLSearchParams(window.location.search).get(name);
-    }
+function buildAuthUrl(conversationId){
+  const nonce = Math.random().toString(36).slice(2);
+  const stateObj = { nonce, conversationId };
+  const stateB64 = encodeState(stateObj);
+  // store nonce and conversationId in sessionStorage as fallback
+  sessionStorage.setItem('oauth_nonce', nonce);
+  sessionStorage.setItem('oauth_conversationId', conversationId);
+  sessionStorage.setItem('oauth_state_b64', stateB64); // helpful for debugging
+  const params = new URLSearchParams({
+    response_type: 'token',
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    state: stateB64
+  });
+  return `https://login.${ENVIRONMENT}/oauth/authorize?${params.toString()}`;
+}
 
-    function parseHashFragment(hash) {
-      if (!hash) return {};
-      return Object.fromEntries(new URLSearchParams(hash.replace(/^#/, '')).entries());
-    }
+// Clean fragment to remove token from address bar while preserving search
+function clearUrlFragment(){
+  if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
+}
 
-    // Build auth URL embedding conversationId in state (nonce + conversationId)
-    function buildAuthUrl(conversationId) {
-      const nonce = Math.random().toString(36).slice(2);
-      const stateObj = { nonce, conversationId };
-      const state = encodeURIComponent(JSON.stringify(stateObj));
-      // store nonce locally to verify on return
-      sessionStorage.setItem('oauth_nonce', nonce);
-      const params = new URLSearchParams({
-        response_type: 'token',
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
-        state: state
-      });
-      return `https://login.${ENVIRONMENT}/oauth/authorize?${params.toString()}`;
-    }
+function fetchPD(conversationId, token){
+  return $.ajax({
+    url: `${BASE_URL}/platform/api/v2/conversations/calls/${encodeURIComponent(conversationId)}`,
+    method: 'GET',
+    dataType: 'json',
+    headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
+  }).then(data => data, jqXHR => {
+    const msg = (jqXHR.responseJSON && (jqXHR.responseJSON.message || jqXHR.responseJSON.error)) || jqXHR.statusText || 'Request failed';
+    return Promise.reject(new Error(`HTTP ${jqXHR.status}: ${msg}`));
+  });
+}
 
-    // Clear fragment from the URL (so token is not visible in address bar / history)
-    function clearUrlFragment() {
-      if (window.location.hash) {
-        // keep search params + pathname
-        history.replaceState(null, '', window.location.pathname + window.location.search);
+// MAIN
+(async function main(){
+  setStatus('Iniciando...');
+  $debug.textContent = '';
+  // conversationId may be provided as query param when first opening the app
+  let conversationId = getQueryParam('conversationId') || null;
+  $cidLabel.textContent = 'conversationId: ' + (conversationId || '-');
+  logDebug('Initial query conversationId: ' + conversationId);
+
+  // parse hash (returned by implicit flow)
+  const hashParams = parseHashFragment(window.location.hash);
+  logDebug('Hash params on load: ' + pretty(hashParams));
+
+  const token = hashParams.access_token || null;
+  let recoveredConversationId = null;
+
+  // attempt: decode state (base64)
+  const rawState = hashParams.state || null;
+  logDebug('rawState from fragment: ' + rawState);
+  if (rawState) {
+    const stateObj = decodeState(rawState);
+    logDebug('decoded state obj: ' + pretty(stateObj));
+    if (stateObj && stateObj.nonce) {
+      const savedNonce = sessionStorage.getItem('oauth_nonce');
+      logDebug('savedNonce from sessionStorage: ' + savedNonce);
+      if (savedNonce && savedNonce === stateObj.nonce) {
+        recoveredConversationId = stateObj.conversationId || null;
+        logDebug('Recovered conversationId from state: ' + recoveredConversationId);
+      } else {
+        logDebug('Nonce mismatch or missing (state nonce != savedNonce).');
       }
+    } else {
+      logDebug('Could not decode/parse state object.');
     }
+  } else {
+    logDebug('No state found in fragment.');
+  }
 
-    // AJAX call to fetch participant data
-    function fetchPD(conversationId, token) {
-      return $.ajax({
-        url: `${BASE_URL}/platform/api/v2/conversations/calls/${encodeURIComponent(conversationId)}`,
-        method: 'GET',
-        dataType: 'json',
-        headers: {
-          'Authorization': 'Bearer ' + token,
-          'Accept': 'application/json'
-        }
-      }).then(
-        data => data,
-        jqXHR => {
-          const msg = (jqXHR.responseJSON && (jqXHR.responseJSON.message || jqXHR.responseJSON.error)) ||
-                      jqXHR.statusText || 'Request failed';
-          return Promise.reject(new Error(`HTTP ${jqXHR.status}: ${msg}`));
-        }
-      );
+  // Fallback: sessionStorage (in case state was lost/modified)
+  if (!recoveredConversationId) {
+    const fallbackCid = sessionStorage.getItem('oauth_conversationId');
+    if (fallbackCid) {
+      recoveredConversationId = fallbackCid;
+      logDebug('Recovered conversationId from sessionStorage fallback: ' + fallbackCid);
+    } else {
+      logDebug('No conversationId in sessionStorage fallback.');
     }
+  }
 
-    // Main flow:
-    // 1) If there's an access_token in the fragment, parse it and the state (validate nonce)
-    // 2) If token missing -> start auth redirect, embedding conversationId in state
-    // 3) Once token + conversationId are available -> do the GET and show result
+  // If we got a token, clear fragment from URL
+  if (token) clearUrlFragment();
 
-    (async function main() {
-      setStatus('Iniciando...');
-      // conversationId initially provided as query param when opening the app:
-      let conversationId = getQueryParam('conversationId') || null;
-      $cidLabel.textContent = 'conversationId: ' + (conversationId || '-');
+  // If no token -> start auth (embedding conversationId in state); but ensure conversationId exists
+  if (!token) {
+    if (!conversationId) {
+      setStatus('Falta conversationId en la URL (ej: ?conversationId=...)', true);
+      $output.textContent = 'Ejemplo: index.html?conversationId=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX';
+      logDebug('Abort: no conversationId to embed in state and no token present.');
+      return;
+    }
+    const authUrl = buildAuthUrl(conversationId);
+    logDebug('Redirecting to auth URL (first 200 chars): ' + authUrl.slice(0,200));
+    setStatus('Redirigiendo para login...');
+    window.location.href = authUrl;
+    return; // navigation
+  }
 
-      // parse hash (if OAuth returned here)
-      const hashParams = parseHashFragment(window.location.hash);
-      const accessTokenFromHash = hashParams.access_token || null;
-      const rawState = hashParams.state || null;
+  // We have token; prefer recoveredConversationId (state) over initial query param
+  const finalConversationId = recoveredConversationId || conversationId;
+  if (!finalConversationId) {
+    setStatus('No se recuperó conversationId del state ni query ni sessionStorage', true);
+    $output.textContent = 'No se puede continuar: falta conversationId.';
+    logDebug('Final fail: conversationId missing.');
+    return;
+  }
 
-      // If access_token present, try to recover conversationId from state and validate nonce
-      let token = null;
-      if (accessTokenFromHash) {
-        token = accessTokenFromHash;
-        if (rawState) {
-          try {
-            const stateObj = JSON.parse(decodeURIComponent(rawState));
-            const savedNonce = sessionStorage.getItem('oauth_nonce');
-            if (stateObj.nonce && savedNonce && stateObj.nonce === savedNonce) {
-              // good: recover conversationId from state
-              if (stateObj.conversationId) conversationId = stateObj.conversationId;
-            } else {
-              console.warn('Nonce mismatch or missing - possible CSRF or session expired');
-            }
-            sessionStorage.removeItem('oauth_nonce');
-          } catch (e) {
-            console.warn('Error parseando state:', e);
-          }
-        }
-        // cleanup fragment so token isn't visible in address bar
-        clearUrlFragment();
-      }
+  // show on UI
+  $cidLabel.textContent = 'conversationId: ' + finalConversationId;
+  setStatus('Obteniendo datos...');
+  try {
+    const data = await fetchPD(finalConversationId, token);
+    $output.textContent = pretty(data);
+    setStatus('OK');
+    logDebug('Fetch successful.');
+  } catch (e) {
+    $output.textContent = e.stack || e.message || String(e);
+    setStatus('Error en la petición', true);
+    logDebug('Fetch error: ' + (e.message || String(e)));
+  }
 
-      // If no token yet -> start OAuth flow (embedding conversationId in state)
-      if (!token) {
-        if (!conversationId) {
-          setStatus('Falta conversationId en la URL (ej: ?conversationId=...)', true);
-          $output.textContent = 'Ejemplo: index.html?conversationId=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX';
-          return;
-        }
-        // redirect to authorization endpoint with state (this navigation will leave the page)
-        setStatus('Redirigiendo para login...');
-        window.location.href = buildAuthUrl(conversationId);
-        return; // navigation happens
-      }
-
-      // At this point we have token and (hopefully) conversationId
-      if (!conversationId) {
-        setStatus('No se recuperó conversationId del state', true);
-        $output.textContent = 'No se puede continuar: falta conversationId.';
-        return;
-      }
-
-      $cidLabel.textContent = 'conversationId: ' + conversationId;
-      setStatus('Obteniendo datos...');
-
-      try {
-        const data = await fetchPD(conversationId, token);
-        $output.textContent = pretty(data);
-        setStatus('OK');
-      } catch (err) {
-        $output.textContent = err.stack || err.message || String(err);
-        setStatus('Error en la petición', true);
-      }
-
-      // Wire reload button to re-fetch using existing token
-      document.getElementById('btnReload').addEventListener('click', async () => {
-        setStatus('Refrescando...');
-        try {
-          const d = await fetchPD(conversationId, token);
-          $output.textContent = pretty(d);
-          setStatus('OK');
-        } catch (e) {
-          $output.textContent = e.stack || e.message || String(e);
-          setStatus('Error en la petición', true);
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
+  // Wire reload button to re-fetch using existing token and finalConversationId
+  document.getElementById('btnReload').addEventListener('click', async () => {
+    setStatus('Refrescando...');
+    try {
+      const d = await fetchPD(finalConversationId, token);
+      $output.textContent = pretty(d);
+      setStatus('OK');
+    } catch (ee) {
+      $output.textContent = ee.stack || ee.message || String(ee);
+      setS
